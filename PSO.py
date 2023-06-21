@@ -4,11 +4,15 @@ import keyboard
 from Matlab_Interface import *
 from Analyze_Outputs import *
 
+
+
+
+
 def main():
     #INPUT VALUES
 
     #Optimization
-    num_its=45       #number of iterations
+    num_its=15      #number of iterations
 
     #Particles
     num_particles=8   #number of particles
@@ -107,21 +111,27 @@ class Particle:
 
         new_fit=self.fitness_fnc(self.position[-1],self.fitness_penalties,self.system_fnc)
         self.fitness.append(new_fit)
-        if self.fitness[-1]<self.best_fitness[-1]:
+        if self.fitness[-1]<self.best_fitness[-1] and check_validity_IQR(self.fitness[-1], Q1_from_experiments, Q3_from_experiments, threshold_from_experiments):
             self.best_fitness.append(self.fitness[-1])
             self.best_position.append(self.position[-1])
         self.iteration+=1
 
 
 def system(ks):
-    crank_length, seat_height = ks
-    modify_model_parameters(crank_length, seat_height)
+    task = 'long-distance'
+
+    new_crank_length, new_pelvis_height = ks
+    rot_vel, resistance = get_velocity_and_resistance(task)
+    modify_model_parameters(new_crank_length, new_pelvis_height)
     get_modified_model(verbose = False)
+    add_prescribed_motion(rot_vel)
+    add_prescribed_force(model_file_path, [resistance, resistance, resistance])
+    add_prescribed_force(prescribed_motion_model_file_path, [resistance, resistance, resistance])
+    add_constraint_element(model_file_path, 'ankle_r')
+    add_constraint_element(model_file_path, 'ankle_l')
     print("Got the modified model")
-    get_torques_model(verbose = False)
-    print("Got the torques version of the modified model")
     get_motion_data(verbose = False)
-    print("Got the motion from the Moco study")
+    print("Got the motion for current model")
     get_controls(verbose= False)
     print("Got the Static Optimization outputs")
     get_FD_simulation(verbose = False)
@@ -130,30 +140,28 @@ def system(ks):
 def get_performance_metrics(ks, syst_fnc):
     syst_fnc(ks)
 
-    # Loading output data from simulations
-    overall_output_data = read_sto_file(FD_output_data_path)
-    force_output_data = read_sto_file(forces_output_data_path)
-
-    # Loading muscle parameter data
+    muscle_force_output_data = read_sto_file(muscle_forces_output_data_path)
+    activation_output_data = read_sto_file(activation_output_data_path)
+    fiber_length_output_data = read_sto_file(fiber_length_output_data_path)
     muscle_params_dict = extract_muscle_params_minidom(model_file_path)
+    individual_metabolic_energy_cost_df = compute_individual_metabolic_energy_cost(fiber_length_output_data, muscle_force_output_data, activation_output_data, muscle_params_dict)
+    metabolic_energy_cost = compute_total_metabolic_cost(individual_metabolic_energy_cost_df)
 
-    # Process data
-    muscles_output_data = handle_missmatched_times(force_output_data, overall_output_data)
-    muscles_output_data = compute_contraction_velocities(muscles_output_data, total_muscles)
-    metabolic_energy_individual = compute_individual_metabolic_energy_cost(muscles_output_data, force_output_data, muscle_params_dict)
+    reaction_forces_output_data = read_sto_file(reaction_forces_output_data_path)
+    u_output_data = read_sto_file(u_output_data_path)
+    q_output_data = read_sto_file(q_output_data_path)
 
-    # Compute relevant values
-    metabolic_energy = compute_total_metabolic_cost(metabolic_energy_individual)
-    energy_output = compute_power_output(overall_output_data)
+    energy_output = get_work(u_output_data, q_output_data, reaction_forces_output_data, 0.15)
+    metabolic_energy_cost = compute_total_metabolic_cost(individual_metabolic_energy_cost_df)
 
-    return metabolic_energy, energy_output
+    return metabolic_energy_cost, energy_output
 
 def fitness(ks, penalties, syst_fnc):
 
     metabolic_energy, energy_output = get_performance_metrics(ks, syst_fnc)
     # Compute fitness
     power_output_penalty, metabolic_energy_cost_penalty = penalties
-    fitness = metabolic_energy_cost_penalty * metabolic_energy - power_output_penalty * energy_output
+    fitness = metabolic_energy
 
     return fitness
 
@@ -179,7 +187,7 @@ def optimize(num_particles,num_its,w,c1,c2,pos_upper_limit,pos_lower_limit,vel_u
     best_global_position=[particles[0].best_position[-1]]
     best_particle=particles[0]
     for i in range(1,len(particles)):
-        if particles[i].best_fitness[-1]<best_global_fitness[-1]:
+        if particles[i].best_fitness[-1]<best_global_fitness[-1] and check_validity_IQR(particles[i].best_fitness[-1], Q1_from_experiments, Q3_from_experiments, threshold_from_experiments):
             best_particle=particles[i]
             best_global_position.append(particles[i].position[-1])
             best_global_fitness.append(particles[i].best_fitness[-1])
@@ -201,7 +209,7 @@ def optimize(num_particles,num_its,w,c1,c2,pos_upper_limit,pos_lower_limit,vel_u
             break
 
         for i in range(len(particles)):
-            if particles[i].best_fitness[-1]<best_global_fitness[-1]:
+            if particles[i].best_fitness[-1]<best_global_fitness[-1] and check_validity_IQR(particles[i].best_fitness[-1], Q1_from_experiments, Q3_from_experiments, threshold_from_experiments):
                 best_particle=particles[i]
                 best_global_position.append(particles[i].position[-1])
                 best_global_fitness.append(particles[i].best_fitness[-1])
